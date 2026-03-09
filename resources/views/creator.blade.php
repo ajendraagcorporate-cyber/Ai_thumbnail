@@ -481,7 +481,13 @@
                 }
 
             } catch (err) {
-                errorMsg.textContent = 'Server error occurred. Please try again.';
+                // Try to get a useful message from the response if available
+                let errMsg = 'Server error occurred. Please try again.';
+                try {
+                    const errData = err && err.json ? await err.json() : null;
+                    if (errData && errData.error) errMsg = errData.error;
+                } catch (_) {}
+                errorMsg.textContent = errMsg;
                 errorMsg.style.display = 'block';
                 console.error(err);
             } finally {

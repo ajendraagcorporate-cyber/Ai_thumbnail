@@ -28,101 +28,116 @@ class ThumbnailController extends Controller
 
     public function generate(Request $request, ThumbnailService $service)
     {
-        // Both images are OPTIONAL
-        $request->validate([
-            'title'   => 'required|string|max:200',
-            'context' => 'required|string|max:1000',
-            'image1'  => 'nullable|image|mimes:jpeg,png,jpg|max:10240',
-            'image2'  => 'nullable|image|mimes:jpeg,png,jpg|max:10240',
-        ]);
-
-        $title   = trim($request->title);
-        $context = trim($request->context ?? '');
-
-        $image1Path = $request->hasFile('image1') ? $request->file('image1')->path() : null;
-        $image2Path = $request->hasFile('image2') ? $request->file('image2')->path() : null;
-
-        $hasFaceImage  = !empty($image1Path) && file_exists($image1Path);
-        $hasBgImage    = !empty($image2Path) && file_exists($image2Path);
-        $hasBothImages = $hasFaceImage && $hasBgImage;
-
-        // ──────────────────────────────────────────────────────────────
-        // Step 1: Build Master Prompt
-        //   START with our own smart detailed prompt (never a blank string).
-        //   If Gemini succeeds → replace with its richer version.
-        //   If Gemini fails → smart fallback is already set, continue.
-        // ──────────────────────────────────────────────────────────────
-        $finalPrompt = $this->buildSmartFallbackPrompt($title, $context);
-
+        // Outer catch: guarantees we always return JSON even if constructor
+        // or validation throws, so JS never sees an HTML 500 page.
         try {
-            $desc1 = null;
-            $desc2 = null;
+            // Both images are OPTIONAL
+            $request->validate([
+                'title'   => 'required|string|max:200',
+                'context' => 'required|string|max:1000',
+                'image1'  => 'nullable|image|mimes:jpeg,png,jpg|max:10240',
+                'image2'  => 'nullable|image|mimes:jpeg,png,jpg|max:10240',
+            ]);
 
-            if ($hasFaceImage) {
-                $desc1 = $service->analyzeImage($image1Path, 'face');
-            }
-            if ($hasBgImage) {
-                $desc2 = $service->analyzeImage($image2Path, 'background');
-            }
+            $title   = trim($request->title);
+            $context = trim($request->context ?? '');
 
-            // generateFinalPrompt handles null desc1/desc2 gracefully
-            $geminiPrompt = $service->generateFinalPrompt($title, $context, $desc1, $desc2);
+            $image1Path = $request->hasFile('image1') ? $request->file('image1')->path() : null;
+            $image2Path = $request->hasFile('image2') ? $request->file('image2')->path() : null;
 
-            // Only accept Gemini prompt if it's a real, detailed response
-            if (!empty($geminiPrompt) && strlen($geminiPrompt) > 100) {
-                $finalPrompt = $geminiPrompt;
-                \Illuminate\Support\Facades\Log::info('✅ Master prompt from Gemini. Length: ' . strlen($finalPrompt));
-            } else {
-                \Illuminate\Support\Facades\Log::warning('⚠️ Gemini returned short/empty prompt — using smart fallback.');
-            }
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::warning('⚠️ Gemini prompt generation failed, using smart fallback: ' . $e->getMessage());
-            // $finalPrompt already has the smart fallback — no need to do anything
-        }
+            $hasFaceImage  = !empty($image1Path) && file_exists($image1Path);
+            $hasBgImage    = !empty($image2Path) && file_exists($image2Path);
+            $hasBothImages = $hasFaceImage && $hasBgImage;
 
-        // ──────────────────────────────────────────────────────────────
-        // Step 2: PATH A — Both images → PHP GD Compositor
-        //         Real face on right, real background on left, title text
-        // ──────────────────────────────────────────────────────────────
-        if ($hasBothImages) {
+            // ──────────────────────────────────────────────────────────────
+            // Step 1: Build Master Prompt
+            //   START with our own smart detailed prompt (never a blank string).
+            //   If Gemini succeeds → replace with its richer version.
+            //   If Gemini fails → smart fallback is already set, continue.
+            // ──────────────────────────────────────────────────────────────
+            $finalPrompt = $this->buildSmartFallbackPrompt($title, $context);
+
             try {
-                $base64Image = $service->createCompositedImage($image2Path, $image1Path, $title);
+                $desc1 = null;
+                $desc2 = null;
+
+                if ($hasFaceImage) {
+                    $desc1 = $service->analyzeImage($image1Path, 'face');
+                }
+                if ($hasBgImage) {
+                    $desc2 = $service->analyzeImage($image2Path, 'background');
+                }
+
+                // generateFinalPrompt handles null desc1/desc2 gracefully
+                $geminiPrompt = $service->generateFinalPrompt($title, $context, $desc1, $desc2);
+
+                // Only accept Gemini prompt if it's a real, detailed response
+                if (!empty($geminiPrompt) && strlen($geminiPrompt) > 100) {
+                    $finalPrompt = $geminiPrompt;
+                    \Illuminate\Support\Facades\Log::info('✅ Master prompt from Gemini. Length: ' . strlen($finalPrompt));
+                } else {
+                    \Illuminate\Support\Facades\Log::warning('⚠️ Gemini returned short/empty prompt — using smart fallback.');
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::warning('⚠️ Gemini prompt generation failed, using smart fallback: ' . $e->getMessage());
+                // $finalPrompt already has the smart fallback — no need to do anything
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // Step 2: PATH A — Both images → PHP GD Compositor
+            //         Real face on right, real background on left, title text
+            // ──────────────────────────────────────────────────────────────
+            if ($hasBothImages) {
+                try {
+                    $base64Image = $service->createCompositedImage($image2Path, $image1Path, $title);
+
+                    return response()->json([
+                        'success'     => true,
+                        'prompt_used' => $finalPrompt,
+                        'image_url'   => "data:image/jpeg;base64," . $base64Image,
+                        'message'     => 'Thumbnail ready!',
+                        'source'      => 'php_compositor',
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::warning('PHP compositor failed, falling back to AI: ' . $e->getMessage());
+                    // fall through to AI generation below
+                }
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            // Step 3: PATH B — Gemini Image API / Pollinations fallback
+            //         Uses the smart detailed prompt (not a blank placeholder)
+            // ──────────────────────────────────────────────────────────────
+            try {
+                $imgResult   = $service->generateFinalImage($finalPrompt, $image1Path, $image2Path);
+                $base64Image = $imgResult['base64'];
 
                 return response()->json([
                     'success'     => true,
                     'prompt_used' => $finalPrompt,
                     'image_url'   => "data:image/jpeg;base64," . $base64Image,
-                    'message'     => 'Thumbnail ready!',
-                    'source'      => 'php_compositor',
+                    'message'     => 'Thumbnail ready! (AI Generated)',
+                    'source'      => $imgResult['service'] === 'gemini' ? 'gemini' : 'pollinations',
                 ]);
-            } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::warning('PHP compositor failed, falling back to AI: ' . $e->getMessage());
-                // fall through to AI generation below
+            } catch (\Exception $aiEx) {
+                \Illuminate\Support\Facades\Log::error('All generation methods failed: ' . $aiEx->getMessage());
+
+                return response()->json([
+                    'success'     => false,
+                    'error'       => 'Could not generate thumbnail. Please try again.',
+                    'prompt_used' => $finalPrompt,
+                ], 500);
             }
-        }
-
-        // ──────────────────────────────────────────────────────────────
-        // Step 3: PATH B — Gemini Image API / Pollinations fallback
-        //         Uses the smart detailed prompt (not a blank placeholder)
-        // ──────────────────────────────────────────────────────────────
-        try {
-            $imgResult   = $service->generateFinalImage($finalPrompt, $image1Path, $image2Path);
-            $base64Image = $imgResult['base64'];
-
+        } catch (\Illuminate\Validation\ValidationException $ve) {
             return response()->json([
-                'success'     => true,
-                'prompt_used' => $finalPrompt,
-                'image_url'   => "data:image/jpeg;base64," . $base64Image,
-                'message'     => 'Thumbnail ready! (AI Generated)',
-                'source'      => $imgResult['service'] === 'gemini' ? 'gemini' : 'pollinations',
-            ]);
-        } catch (\Exception $aiEx) {
-            \Illuminate\Support\Facades\Log::error('All generation methods failed: ' . $aiEx->getMessage());
-
+                'success' => false,
+                'error'   => 'Validation failed: ' . implode(' ', $ve->validator->errors()->all()),
+            ], 422);
+        } catch (\Exception $globalEx) {
+            \Illuminate\Support\Facades\Log::error('Unhandled exception in generate(): ' . $globalEx->getMessage() . ' | ' . $globalEx->getFile() . ':' . $globalEx->getLine());
             return response()->json([
-                'success'     => false,
-                'error'       => 'Could not generate thumbnail. Please try again.',
-                'prompt_used' => $finalPrompt,
+                'success' => false,
+                'error'   => 'Server configuration error: ' . $globalEx->getMessage(),
             ], 500);
         }
     }

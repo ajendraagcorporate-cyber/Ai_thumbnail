@@ -11,11 +11,10 @@ class ThumbnailService
 
     public function __construct()
     {
-        $this->apiKey = env('GEMINI_API_KEY');
-
-        if (empty($this->apiKey)) {
-            throw new \Exception('Gemini API key is not set. Please add GEMINI_API_KEY to your .env file.');
-        }
+        $this->apiKey = env('GEMINI_API_KEY', '');
+        // Note: we no longer throw here — individual methods will throw if the key
+        // is absent, so the controller's try/catch can handle it gracefully and
+        // still return JSON (instead of an HTML 500 page).
     }
 
     /**
@@ -29,6 +28,10 @@ class ThumbnailService
      */
     private function makeApiRequest($endpoint, $payload, $retryCount = 0)
     {
+        if (empty($this->apiKey)) {
+            throw new \Exception('GEMINI_API_KEY is not configured. Please set it in Railway environment variables.');
+        }
+
         set_time_limit(240); // allow longer execution for backoff sleeps
 
         // always supply the key as query param (relying on constructor check)
@@ -547,12 +550,22 @@ class ThumbnailService
         // ── 4. Bold Typography (Hindi/Devanagari via Nirmala font) ───────────────
         // Font priority: NirmalaB (Hindi) → Nirmala → Arial Bold → fallback
         $fontCandidates = [
+            // ── Linux / Docker paths (Railway deployment) ──────────────────────
+            base_path('resources/fonts/LiberationSans-Bold.ttf'),
+            base_path('resources/fonts/LiberationSans-Regular.ttf'),
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+            '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+            '/usr/share/fonts/liberation/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+            // ── Windows paths (local XAMPP development) ────────────────────────
             'C:\\Windows\\Fonts\\NirmalaB.ttf',
             'C:\\Windows\\Fonts\\Nirmala.ttf',
             'C:\\Windows\\Fonts\\arialbd.ttf',
             'C:\\Windows\\Fonts\\arial.ttf',
-            base_path('resources/fonts/LiberationSans-Bold.ttf'),
-            base_path('resources/fonts/LiberationSans-Regular.ttf'),
         ];
         $fontPath = null;
         foreach ($fontCandidates as $f) {

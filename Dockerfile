@@ -1,6 +1,6 @@
 FROM php:8.2-cli
 
-# Install system dependencies
+# Install system dependencies + fonts for GD text rendering
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -12,8 +12,12 @@ RUN apt-get update && apt-get install -y \
     libzip-dev \
     zip \
     unzip \
+    fonts-liberation \
+    fonts-dejavu-core \
+    fontconfig \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip \
+    && fc-cache -fv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Composer
