@@ -28,14 +28,24 @@ COPY . .
 # Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 
-# Set permissions
-RUN chmod -R 775 storage bootstrap/cache
+# Create and set permissions for storage directories
+RUN mkdir -p storage/framework/sessions \
+    storage/framework/views \
+    storage/framework/cache \
+    storage/logs \
+    bootstrap/cache \
+    && chmod -R 777 storage bootstrap/cache
 
-# Cache Laravel config
-RUN php artisan config:cache \
-    && php artisan route:cache \
-    && php artisan view:cache
+# Create .env from example if .env doesn't exist (env vars will be injected by Railway)
+RUN cp -n .env.example .env 2>/dev/null || true
+
+# Generate app key if not set (Railway will override with env var)
+RUN php artisan key:generate --no-interaction 2>/dev/null || true
 
 EXPOSE 8080
 
-CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8080"]
+# Start script: clear caches and serve
+CMD php artisan config:clear \
+    && php artisan view:clear \
+    && php artisan route:clear \
+    && php artisan serve --host=0.0.0.0 --port=${PORT:-8080}
