@@ -120,28 +120,51 @@ class ThumbnailService
      * @param string $desc2 result of analyzeImage() for background
      * @return string
      */
-    public function generateFinalPrompt($title, $context, $desc1, $desc2)
+    public function generateFinalPrompt($title, $context, $desc1 = null, $desc2 = null)
     {
         $modelName = env('GEMINI_MODEL_GENERATE', 'gemini-1.5-pro');
         $endpoint = "{$this->baseUrl}/models/{$modelName}:generateContent";
 
-        // build human-friendly instruction with proper escaping and explicit references to the two
-        // uploaded images.  Desc1 is based on the first image (face/main object) and desc2 on the
-        // second image (background/context).
-        $instruction = "You are a professional YouTube Thumbnail Expert. "
-            . "Using the first reference image (main subject) and the second reference image (background), "
-            . "craft a detailed, visual-heavy prompt for an AI image generator (Midjourney / DALL-E / Gemini Image) that will produce a thumbnail matching the following specifics:\n"
-            . "Video Title (MUST APPEAR IN THUMBNAIL): '{$title}'\n"
-            . "Video Context/Details: '{$context}'\n"
-            . "Reference Image #1 Description (use this as the basis for the character/person/object on the right): {$desc1}\n"
-            . "Reference Image #2 Description (use this as the basis for the background and overall vibe): {$desc2}\n\n"
-            . "CRITICAL INSTRUCTIONS FOR AI IMAGE GENERATOR:\n"
-            . "1. TITLE TEXT ON THUMBNAIL: The video title '{$title}' must be prominently displayed as large, bold, eye-catching text on the *left* side of the thumbnail. Use a bright color (yellow, white, orange, etc.) with a dark shadow or outline for readability. This is MANDATORY and non-negotiable.\n"
-            . "2. CHARACTER ON RIGHT: The right side MUST feature a person or object that closely resembles the first reference image. Maintain the pose, expression, clothing, or other key visual cues; the subject should look confident and dynamic (e.g., pointing, shocked, arms crossed).\n"
-            . "3. BACKGROUND LAYOUT: The background should draw heavily from the second reference image's mood, colors, and elements. It should be bold, colorful, and dramatic — bright gradients, neon effects, financial charts, etc., as appropriate to the context text. High contrast is essential.\n"
-            . "4. CONTEXT ACCURACY: Incorporate visual hints or symbols that directly relate to the video context ('{$context}'). For example, if the video is about the stock market, include upward-trending graphs, money icons, or relevant signage.\n"
-            . "5. STYLE: Professional YouTube thumbnail style only. High contrast. Vibrant neon/gold/purple/red color palette. The overall look must scream 'clickbait-worthy' and premium. 16:9 aspect ratio, no watermarks, no extra text besides the title.\n"
-            . "6. CRITICAL: Output ONLY the raw prompt text. Do not include any explanatory text, asterisks, quotes, or introductory phrases. The output should be a single prompt ready to paste into an image generator.\n";
+        $hasFace = !empty($desc1);
+        $hasBg   = !empty($desc2);
+
+        $instruction = "You are a world-class YouTube Thumbnail Prompt Engineer. "
+            . "Craft a single, detailed, visual-heavy prompt for an AI image generator (Gemini Image) to create a stunning YouTube thumbnail.\n"
+            . "Video Title (MUST APPEAR IN THUMBNAIL EXACTLY AS WRITTEN): '{$title}'\n"
+            . "Video Context/Details: '{$context}'\n";
+
+        if ($hasFace) {
+            $instruction .= "Reference Image #1 — Main Subject/Face Description: {$desc1}\n";
+        }
+        if ($hasBg) {
+            $instruction .= "Reference Image #2 — Background/Context Description: {$desc2}\n";
+        }
+
+        $instruction .= "\nCRITICAL INSTRUCTIONS FOR THE AI IMAGE GENERATOR PROMPT YOU WILL WRITE:\n";
+        $instruction .= "1. TITLE TEXT: The EXACT text '{$title}' MUST BE prominently shown as large, bold, eye-catching text on the LEFT side. "
+            . "If the title is in Hindi/Devanagari or any non-English language, render it EXACTLY in that script. "
+            . "Use ultra-bright yellow or white color with thick dark shadow/outline. MANDATORY.\n";
+
+        if ($hasFace) {
+            $instruction .= "2. FACE/CHARACTER (RIGHT SIDE): The right side MUST show a PHOTOREALISTIC PERSON or OBJECT that closely matches "
+                . "the physical features, skin tone, hair, expression, and clothing described in Reference Image #1. "
+                . "Same hair color/style, same facial structure, same expression. Do NOT create a random/generic face.\n";
+        } else {
+            $instruction .= "2. FACE/CHARACTER (RIGHT SIDE): The right side MUST show a PHOTOREALISTIC, DRAMATIC character or object "
+                . "that is creatively and directly relevant to the video topic: '{$context}'. "
+                . "Make it visually striking and professional.\n";
+        }
+
+        if ($hasBg) {
+            $instruction .= "3. BACKGROUND: Draw heavily from Reference Image #2's mood, colors, and elements. Bold, colorful, dramatic — bright gradients, neon effects, etc. High contrast.\n";
+        } else {
+            $instruction .= "3. BACKGROUND: Design a bold, dramatic, vivid background that perfectly represents the video topic: '{$context}'. "
+                . "Use neon gradients, glowing effects, and thematic visuals (e.g., financial charts for finance topics, landscapes for travel, etc.). High contrast.\n";
+        }
+
+        $instruction .= "4. CONTEXT ACCURACY: Incorporate compelling visual symbols directly related to '{$context}'.\n"
+            . "5. STYLE: Professional YouTube thumbnail. High contrast. Vibrant neon/gold/purple/red palette. 16:9 aspect ratio. No watermarks. No extra text besides the video title.\n"
+            . "6. CRITICAL: Output ONLY the raw prompt text — a single paragraph. No explanatory text, asterisks, quotes, or intro phrases like 'Here is the prompt:'.\n";
 
         $response = $this->makeApiRequest($endpoint, [
             'contents' => [[
@@ -154,9 +177,9 @@ class ThumbnailService
         \Illuminate\Support\Facades\Log::info('generateFinalPrompt Response: ', $response->json() ?? []);
 
         $text = $response->json('candidates.0.content.parts.0.text');
-        
+
         // Cleanup potential AI conversational garbage
-        $text = preg_replace('/^Here is.*?:/sim', '', $text);
+        $text = preg_replace('/^Here is.*?:\s*/sim', '', $text);
         $text = preg_replace('/^\*\*AI IMAGE GENERATOR PROMPT:\*\*/sim', '', $text);
         return trim(str_replace(['**', '```'], '', $text));
     }
@@ -188,7 +211,7 @@ class ThumbnailService
         ]);
 
         $text = $response->json('candidates.0.content.parts.0.text');
-        
+
         // Cleanup potential AI conversational garbage
         $text = preg_replace('/^Here is.*?:/sim', '', $text);
         return trim(str_replace(['**', '```'], '', $text));
@@ -223,12 +246,33 @@ class ThumbnailService
             throw new \InvalidArgumentException('Prompt cannot be empty');
         }
 
-        $modelName = env('GEMINI_MODEL_IMAGE', 'gemini-2.0-flash-preview-image-generation');
-        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$modelName}:generateContent";
+        // Try multiple Gemini image models in order (first available will be used)
+        // gemini-2.0-flash-exp supports image generation natively via generateContent
+        $imageModels = [
+            env('GEMINI_MODEL_IMAGE', 'gemini-2.0-flash-exp'),
+            'gemini-2.0-flash',
+            'gemini-1.5-flash',
+        ];
 
         // Build contents payload with optional inline images
+        $hasImages = ($facePath && file_exists($facePath)) || ($bgPath && file_exists($bgPath));
+
+        // Enhance prompt with explicit reference-image instructions when images are attached
+        $enhancedPrompt = $prompt;
+        if ($hasImages) {
+            $imageNote = "\n\nIMPORTANT: I am attaching reference images. ";
+            if ($facePath && file_exists($facePath)) {
+                $imageNote .= "The FIRST attached image is the face/person reference — replicate this person's exact facial features, skin tone, hair, and expression in the generated thumbnail. ";
+            }
+            if ($bgPath && file_exists($bgPath)) {
+                $imageNote .= "The SECOND attached image is the background/context reference — use its mood, colors, and elements for the background. ";
+            }
+            $imageNote .= "Follow the text prompt strictly.";
+            $enhancedPrompt = $prompt . $imageNote;
+        }
+
         $payloadParts = [
-            ['text' => $prompt]
+            ['text' => $enhancedPrompt]
         ];
 
         $attachImage = function ($path) use (&$payloadParts) {
@@ -240,57 +284,171 @@ class ThumbnailService
         $attachImage($facePath);
         $attachImage($bgPath);
 
-        try {
-            $response = $this->makeApiRequest($endpoint, [
-                'contents' => [[
-                    'parts' => $payloadParts
-                ]],
-                'generationConfig' => [
-                    'responseModalities' => ['TEXT', 'IMAGE']
-                ]
-            ]);
+        foreach ($imageModels as $modelName) {
+            $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$modelName}:generateContent";
+            try {
+                $response = Http::withoutVerifying()
+                    ->timeout(120)
+                    ->post("{$endpoint}?key={$this->apiKey}", [
+                        'contents' => [[
+                            'parts' => $payloadParts
+                        ]],
+                        'generationConfig' => [
+                            'responseModalities' => ['TEXT', 'IMAGE']
+                        ]
+                    ]);
 
-            \Illuminate\Support\Facades\Log::info('generateFinalImage Response: ', $response->json() ?? []);
+                if ($response->status() === 404) {
+                    \Illuminate\Support\Facades\Log::warning("Model {$modelName} not found, trying next...");
+                    continue; // try next model
+                }
 
-            // Several possible locations for the returned image bytes
-            if ($response->json('predictions.0.bytesBase64Encoded')) {
-                return ['base64' => $response->json('predictions.0.bytesBase64Encoded'), 'service' => 'gemini'];
-            }
+                if ($response->failed()) {
+                    \Illuminate\Support\Facades\Log::warning("Model {$modelName} failed ({$response->status()}), trying next...");
+                    continue;
+                }
 
-            if ($response->json('candidates.0.content.parts.0.inlineData.data')) {
-                return ['base64' => $response->json('candidates.0.content.parts.0.inlineData.data'), 'service' => 'gemini'];
-            }
+                \Illuminate\Support\Facades\Log::info("Gemini image response from {$modelName}");
 
-            $candidates = $response->json('candidates') ?? [];
-            foreach ($candidates as $candidate) {
-                $parts = $candidate['content']['parts'] ?? [];
-                foreach ($parts as $part) {
-                    if (!empty($part['inlineData']['data'])) {
-                        return ['base64' => $part['inlineData']['data'], 'service' => 'gemini'];
+                // Several possible locations for the returned image bytes
+                if ($response->json('predictions.0.bytesBase64Encoded')) {
+                    return ['base64' => $response->json('predictions.0.bytesBase64Encoded'), 'service' => 'gemini'];
+                }
+
+                if ($response->json('candidates.0.content.parts.0.inlineData.data')) {
+                    return ['base64' => $response->json('candidates.0.content.parts.0.inlineData.data'), 'service' => 'gemini'];
+                }
+
+                $candidates = $response->json('candidates') ?? [];
+                foreach ($candidates as $candidate) {
+                    $parts = $candidate['content']['parts'] ?? [];
+                    foreach ($parts as $part) {
+                        if (!empty($part['inlineData']['data'])) {
+                            return ['base64' => $part['inlineData']['data'], 'service' => 'gemini'];
+                        }
                     }
                 }
-            }
 
-            \Illuminate\Support\Facades\Log::warning('Gemini image model returned no image. Falling back to Pollinations.ai');
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::warning('Gemini image model failed: ' . $e->getMessage() . '. Falling back to Pollinations.ai');
+                \Illuminate\Support\Facades\Log::warning("Model {$modelName} returned no image data.");
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::warning("Model {$modelName} exception: " . $e->getMessage());
+            }
         }
 
+        \Illuminate\Support\Facades\Log::warning('All Gemini image models failed. Falling back to Pollinations.ai');
+
         // --- Fallback: Pollinations.ai (free, no key needed) ---
-        $encodedPrompt = urlencode($prompt);
-        $pollinationsUrl = "https://image.pollinations.ai/prompt/{$encodedPrompt}?width=1280&height=720&nologo=true&enhance=true";
+        // Use a truncated but keyword-rich version of the prompt for best URL compatibility
+        $shortPrompt = mb_substr($prompt, 0, 500);
+        $encodedPrompt = rawurlencode($shortPrompt);
+        $seed = rand(1, 99999);
+        $pollinationsUrl = "https://image.pollinations.ai/prompt/{$encodedPrompt}?width=1280&height=720&nologo=true&enhance=true&model=flux&seed={$seed}";
 
         \Illuminate\Support\Facades\Log::info('Trying Pollinations.ai fallback: ' . $pollinationsUrl);
 
         $imgResponse = Http::withoutVerifying()->timeout(90)->get($pollinationsUrl);
 
         if ($imgResponse->successful() && strlen($imgResponse->body()) > 1000) {
-            return base64_encode($imgResponse->body());
+            return ['base64' => base64_encode($imgResponse->body()), 'service' => 'pollinations'];
         }
 
         // if we reach here something unexpected happened
         \Illuminate\Support\Facades\Log::error('Both Gemini and Pollinations failed.');
         throw new \Exception('Could not generate image. Please check your API key and try again.');
+    }
+
+    /**
+     * Remove a white or near-white background from a GD image resource.
+     *
+     * Strategy:
+     *   1. Convert to true-colour with alpha support.
+     *   2. Walk every pixel on the 4 edges of the image.
+     *   3. For each border pixel whose RGB components are all above a threshold
+     *      (i.e. it looks whitish), flood-fill from that pixel, making all
+     *      connected near-white pixels fully transparent.
+     *   4. Return the modified image resource (caller must destroy it).
+     *
+     * @param  resource  $img   GD image resource (true-colour)
+     * @param  int       $threshold  0-255; pixels with R, G, B all ≥ this are white-ish.
+     *                               230 is a good default (handles off-white studio back-
+     *                               grounds while keeping skin tones).
+     * @return resource  same or new GD resource with white BG made transparent
+     */
+    private function removeLightBackground($img, int $threshold = 230)
+    {
+        $w = imagesx($img);
+        $h = imagesy($img);
+
+        // Create a fresh true-colour canvas with alpha channel
+        $out = imagecreatetruecolor($w, $h);
+        imagealphablending($out, false);
+        imagesavealpha($out, true);
+        $transparent = imagecolorallocatealpha($out, 0, 0, 0, 127);
+        imagefill($out, 0, 0, $transparent);
+
+        // Copy original pixels onto the new canvas
+        imagecopy($out, $img, 0, 0, 0, 0, $w, $h);
+
+        // Helper: is pixel at (x,y) "near white" and fully opaque?
+        $isWhiteish = function (int $x, int $y) use ($out, $w, $h, $threshold): bool {
+            if ($x < 0 || $x >= $w || $y < 0 || $y >= $h) return false;
+            $rgba  = imagecolorat($out, $x, $y);
+            $alpha = ($rgba >> 24) & 0x7F;
+            if ($alpha > 20) return false; // already transparent-ish – skip
+            $r = ($rgba >> 16) & 0xFF;
+            $g = ($rgba >> 8)  & 0xFF;
+            $b =  $rgba        & 0xFF;
+            return ($r >= $threshold && $g >= $threshold && $b >= $threshold);
+        };
+
+        // Flood-fill using SplStack (iterative BFS to avoid recursion limit)
+        // visited[] is indexed as y*w+x for fast lookup (no string ops)
+        $visited = new \SplFixedArray($w * $h);
+        $fullyTransparent = imagecolorallocatealpha($out, 255, 255, 255, 127);
+
+        $makeTransparent = function (int $startX, int $startY) use (
+            $out,
+            $w,
+            $h,
+            $threshold,
+            &$isWhiteish,
+            &$visited,
+            $fullyTransparent
+        ) {
+            $stack = new \SplStack();
+            $stack->push([$startX, $startY]);
+
+            while (!$stack->isEmpty()) {
+                [$cx, $cy] = $stack->pop();
+                if ($cx < 0 || $cx >= $w || $cy < 0 || $cy >= $h) continue;
+                $idx = $cy * $w + $cx;
+                if ($visited[$idx]) continue;
+                $visited[$idx] = true;
+
+                if (!$isWhiteish($cx, $cy)) continue;
+
+                imagesetpixel($out, $cx, $cy, $fullyTransparent);
+
+                // Push 4-connected neighbours
+                $stack->push([$cx + 1, $cy]);
+                $stack->push([$cx - 1, $cy]);
+                $stack->push([$cx, $cy + 1]);
+                $stack->push([$cx, $cy - 1]);
+            }
+        };
+
+        // Seed from all 4 edges
+        for ($x = 0; $x < $w; $x++) {
+            if ($isWhiteish($x, 0))       $makeTransparent($x, 0);
+            if ($isWhiteish($x, $h - 1))  $makeTransparent($x, $h - 1);
+        }
+        for ($y = 0; $y < $h; $y++) {
+            if ($isWhiteish(0, $y))       $makeTransparent(0, $y);
+            if ($isWhiteish($w - 1, $y))  $makeTransparent($w - 1, $y);
+        }
+
+        imagedestroy($img);
+        return $out;
     }
 
     public function createCompositedImage($bgPath, $facePath, $title)
@@ -309,140 +467,159 @@ class ThumbnailService
             return false;
         };
 
-        // 1. Background (Image 2)
+        // ── 1. Background – fill canvas with the uploaded background image ───────
         $bg = $loadImage($bgPath);
         if ($bg) {
-            $bgWidth = imagesx($bg);
+            $bgWidth  = imagesx($bg);
             $bgHeight = imagesy($bg);
 
-            // Smart cover resize (Scale to fill)
-            $bgRatio = $bgWidth / $bgHeight;
+            // Cover-crop: fill canvas without distorting
+            $bgRatio     = $bgWidth / $bgHeight;
             $canvasRatio = 1280 / 720;
 
             if ($bgRatio > $canvasRatio) {
-                $newWidth = (int)($bgHeight * $canvasRatio);
-                $newHeight = $bgHeight;
-                $srcX = (int)(($bgWidth - $newWidth) / 2);
+                $newW = (int)($bgHeight * $canvasRatio);
+                $newH = $bgHeight;
+                $srcX = (int)(($bgWidth - $newW) / 2);
                 $srcY = 0;
             } else {
-                $newWidth = $bgWidth;
-                $newHeight = (int)($bgWidth / $canvasRatio);
+                $newW = $bgWidth;
+                $newH = (int)($bgWidth / $canvasRatio);
                 $srcX = 0;
-                $srcY = (int)(($bgHeight - $newHeight) / 2);
+                $srcY = (int)(($bgHeight - $newH) / 2);
             }
 
-            imagecopyresampled($canvas, $bg, 0, 0, $srcX, $srcY, 1280, 720, $newWidth, $newHeight);
+            imagecopyresampled($canvas, $bg, 0, 0, $srcX, $srcY, 1280, 720, $newW, $newH);
             imagedestroy($bg);
 
-            $darken = imagecolorallocatealpha($canvas, 0, 0, 0, 75); 
+            // Very light darken – keep background vivid like reference image
+            $darken = imagecolorallocatealpha($canvas, 0, 0, 0, 100);
             imagefilledrectangle($canvas, 0, 0, 1280, 720, $darken);
-
-            // Just a slight blur so we don't destroy AI background details
-            imagefilter($canvas, IMG_FILTER_GAUSSIAN_BLUR);
         } else {
-            $darkColor = imagecolorallocate($canvas, 15, 20, 35);
-            imagefill($canvas, 0, 0, $darkColor);
+            // Fallback: vibrant purple gradient
+            for ($y = 0; $y < 720; $y++) {
+                $r = (int)(120 - ($y / 720) * 40);
+                $g = (int)(30  + ($y / 720) * 10);
+                $b = (int)(200 - ($y / 720) * 60);
+                $c = imagecolorallocate($canvas, $r, $g, $b);
+                imageline($canvas, 0, $y, 1280, $y, $c);
+            }
         }
 
-        $glowColor = imagecolorallocatealpha($canvas, 70, 0, 200, 60);
-        $pointsGlow = [-50, -50, 880, -50, 680, 770, -50, 770];
-        imagefilledpolygon($canvas, $pointsGlow, 4, $glowColor);
+        // ── 2. Left-side semi-transparent panel for text readability ─────────────
+        // Matches reference: slightly darker left area so yellow text pops
+        $panelColor = imagecolorallocatealpha($canvas, 10, 5, 40, 60);
+        imagefilledrectangle($canvas, 0, 0, 680, 720, $panelColor);
 
-        $panelColor = imagecolorallocatealpha($canvas, 10, 10, 20, 20);
-        $pointsPanel = [-50, -50, 850, -50, 650, 770, -50, 770];
-        imagefilledpolygon($canvas, $pointsPanel, 4, $panelColor);
-
-        // Neon Cyan Accent Line
-        $neonColor = imagecolorallocate($canvas, 0, 255, 255); // Cyan
-        imagesetthickness($canvas, 8);
-        imageline($canvas, 850, -50, 650, 770, $neonColor);
-
-        // 3. Face / Character (Image 1)
+        // ── 3. Face / Character on the RIGHT (Image 1) ────────────────────────────
         $face = $loadImage($facePath);
         if ($face) {
             imagepalettetotruecolor($face);
-            imagealphablending($face, true);
+
+            // Remove white/near-white background so the person blends naturally
+            $face = $this->removeLightBackground($face);
+
+            imagealphablending($face, false);
             imagesavealpha($face, true);
 
             $faceW = imagesx($face);
             $faceH = imagesy($face);
 
-            // Scale optimally to dominate right side
-            $newH = 680;
-            $newW = (int)(($faceW / $faceH) * $newH);
+            // Fill right ~60% of the canvas height
+            $newH  = 710;
+            $newW  = (int)(($faceW / $faceH) * $newH);
 
-            $destX = 1280 - $newW - 10; // Padding from right edge
-            $destY = 720 - $newH; // Sit on bottom
+            // Clamp width so it does not overflow canvas
+            if ($newW > 680) {
+                $newW = 680;
+                $newH = (int)(($faceH / $faceW) * $newW);
+            }
 
-            // Draw Face
+            $destX = 1280 - $newW - 5;   // flush to right edge
+            $destY = 720  - $newH;        // sit on bottom
+
+            // Enable alpha blending on canvas so transparent pixels show through
+            imagealphablending($canvas, true);
             imagecopyresampled($canvas, $face, $destX, $destY, 0, 0, $newW, $newH, $faceW, $faceH);
             imagedestroy($face);
         }
 
-        // 4. Highly Readable & Bold Typography
-        // use system font or fallback to bundled font
-        $fontPath = 'C:\Windows\Fonts\NirmalaB.ttf';
-        if (!file_exists($fontPath)) {
-            // fallback to bundled LiberationSans if available
-            $fallback = base_path('resources/fonts/LiberationSans-Regular.ttf');
-            if (file_exists($fallback)) {
-                $fontPath = $fallback;
+        // ── 4. Bold Typography (Hindi/Devanagari via Nirmala font) ───────────────
+        // Font priority: NirmalaB (Hindi) → Nirmala → Arial Bold → fallback
+        $fontCandidates = [
+            'C:\\Windows\\Fonts\\NirmalaB.ttf',
+            'C:\\Windows\\Fonts\\Nirmala.ttf',
+            'C:\\Windows\\Fonts\\arialbd.ttf',
+            'C:\\Windows\\Fonts\\arial.ttf',
+            base_path('resources/fonts/LiberationSans-Bold.ttf'),
+            base_path('resources/fonts/LiberationSans-Regular.ttf'),
+        ];
+        $fontPath = null;
+        foreach ($fontCandidates as $f) {
+            if (file_exists($f)) {
+                $fontPath = $f;
+                break;
             }
         }
 
-        if (file_exists($fontPath)) {
-            $textColorWhite = imagecolorallocate($canvas, 255, 255, 255);
-            $textColorYellow = imagecolorallocate($canvas, 255, 230, 0); // Vibrant Gold
-            $shadowColor = imagecolorallocate($canvas, 10, 10, 15);
+        if ($fontPath) {
+            // Colors matching reference image: vibrant yellow text, black outline
+            $yellow      = imagecolorallocate($canvas, 255, 220, 0);
+            $white       = imagecolorallocate($canvas, 255, 255, 255);
+            $black       = imagecolorallocate($canvas, 0, 0, 0);
+            $darkOutline  = imagecolorallocate($canvas, 15, 10, 20);
 
-            $fontSize = 50;
+            $fontSize   = 72;   // Large, dominant text
+            $maxWidth   = 580;  // Max text width before wrapping
+            $padding    = 55;   // Left margin
 
+            // Word-wrap
             $words = explode(' ', trim($title));
             $lines = [];
-            $currentLine = '';
+            $cur   = '';
 
             foreach ($words as $word) {
-                $testLine = $currentLine == '' ? $word : $currentLine . ' ' . $word;
-                $bbox = imagettfbbox($fontSize, 0, $fontPath, $testLine);
-                $width = $bbox[2] - $bbox[0];
-                if ($width > 550) { // Keep inside dark panel
-                    $lines[] = $currentLine;
-                    $currentLine = $word;
+                $test = $cur === '' ? $word : $cur . ' ' . $word;
+                $bbox = imagettfbbox($fontSize, 0, $fontPath, $test);
+                if (($bbox[2] - $bbox[0]) > $maxWidth && $cur !== '') {
+                    $lines[] = $cur;
+                    $cur     = $word;
                 } else {
-                    $currentLine = $testLine;
+                    $cur = $test;
                 }
             }
-            if ($currentLine != '') {
-                $lines[] = $currentLine;
+            if ($cur !== '') $lines[] = $cur;
+
+            // Reduce font size if too many lines
+            if (count($lines) > 4) {
+                $fontSize = 56;
             }
 
-            // Vertically center text based on number of lines
-            $totalHeight = count($lines) * 90;
-            $y = (720 - $totalHeight) / 2 + 60;
+            $lineHeight  = (int)($fontSize * 1.35);
+            $totalHeight = count($lines) * $lineHeight;
+            $startY      = (int)((720 - $totalHeight) / 2) + $lineHeight;
 
-            foreach ($lines as $index => $line) {
-                // Highlight last line in Yellow for click-bait effect
-                $color = ($index == count($lines) - 1 && count($lines) > 1) ? $textColorYellow : $textColorWhite;
-                $x = 70; // X padding
+            foreach ($lines as $i => $line) {
+                // ALL lines yellow like reference; last line can be white for contrast
+                $color = ($i === count($lines) - 1 && count($lines) > 2) ? $white : $yellow;
+                $x = $padding;
+                $y = $startY + ($i * $lineHeight);
 
-                // Heavy multi-layered shadow for extreme readability
-                for ($sx = 1; $sx <= 4; $sx++) {
-                    for ($sy = 1; $sy <= 4; $sy++) {
-                        imagettftext($canvas, $fontSize, 0, $x + $sx, $y + $sy, $shadowColor, $fontPath, $line);
-                    }
+                // Thick black outline (draw 8 directions) for crisp readability
+                $offsets = [[-3, -3], [0, -3], [3, -3], [-3, 0], [3, 0], [-3, 3], [0, 3], [3, 3]];
+                foreach ($offsets as [$ox, $oy]) {
+                    imagettftext($canvas, $fontSize, 0, $x + $ox, $y + $oy, $black, $fontPath, $line);
                 }
-
-                // Actual outline/glow could be added, but heavy shadow is usually best
+                // Main text
                 imagettftext($canvas, $fontSize, 0, $x, $y, $color, $fontPath, $line);
-                $y += 90;
             }
         }
 
         ob_start();
-        imagejpeg($canvas, null, 95); // High quality JPEG
-        $imageBytes = ob_get_clean();
+        imagejpeg($canvas, null, 95);
+        $bytes = ob_get_clean();
         imagedestroy($canvas);
 
-        return base64_encode($imageBytes);
+        return base64_encode($bytes);
     }
 }

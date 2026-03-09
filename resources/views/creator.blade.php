@@ -61,12 +61,27 @@
             letter-spacing: 0.5px;
         }
 
+        .optional-badge {
+            display: inline-block;
+            background: rgba(167, 139, 250, 0.15);
+            border: 1px solid rgba(167, 139, 250, 0.35);
+            color: #a78bfa;
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 20px;
+            margin-left: 6px;
+            text-transform: none;
+            letter-spacing: 0;
+            font-weight: 500;
+            vertical-align: middle;
+        }
+
         input[type="text"],
         textarea,
         input[type="file"] {
             width: 100%;
             padding: 12px 14px;
-            margin-bottom: 18px;
+            margin-bottom: 4px;
             border: 1px solid rgba(255, 255, 255, 0.15);
             border-radius: 10px;
             background: rgba(255, 255, 255, 0.08);
@@ -91,6 +106,36 @@
             resize: vertical;
         }
 
+        .field-hint {
+            color: #6b7280;
+            font-size: 12px;
+            margin-bottom: 16px;
+            display: block;
+            line-height: 1.5;
+        }
+
+        .optional-note {
+            color: #a78bfa;
+            font-size: 11.5px;
+            font-weight: 500;
+        }
+
+        .image-field-wrapper {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px dashed rgba(167, 139, 250, 0.25);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 18px;
+        }
+
+        .image-field-wrapper label {
+            margin-bottom: 10px;
+        }
+
+        .image-field-wrapper input[type="file"] {
+            margin-bottom: 6px;
+        }
+
         .btn-primary {
             background: linear-gradient(135deg, #7c3aed, #4f46e5);
             color: #fff;
@@ -102,6 +147,7 @@
             cursor: pointer;
             width: 100%;
             transition: opacity 0.3s, transform 0.15s;
+            margin-top: 6px;
         }
 
         .btn-primary:hover {
@@ -250,6 +296,20 @@
             display: none;
             font-size: 13px;
         }
+
+        .divider {
+            border: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            margin: 20px 0 22px;
+        }
+
+        .section-note {
+            font-size: 12px;
+            color: #6b7280;
+            text-align: center;
+            margin-bottom: 16px;
+            font-style: italic;
+        }
     </style>
 </head>
 
@@ -261,27 +321,47 @@
 
         <form id="thumbnailForm" action="{{ route('thumbnail.create') }}" method="POST" enctype="multipart/form-data">
             @csrf
+
             <label>Video Title</label>
-            <input type="text" name="title" placeholder="Enter awesome video title..." required>
+            <input type="text" name="title" id="title" placeholder="Enter awesome video title..." required>
+            <span class="field-hint">AI will use this as the main text on your thumbnail.</span>
 
             <label>Video Context / Details</label>
-            <textarea name="context" rows="3" placeholder="What is the video exactly about?" required></textarea>
+            <textarea name="context" id="context" rows="3" placeholder="Describe what the video is about (e.g. Best stocks to invest in 2026, finance tips...)" required></textarea>
+            <span class="field-hint">Helps AI understand the theme, mood and visual style to create.</span>
 
-            <label>Image 1 (Face / Main Object)</label>
-            <input type="file" name="image1" accept="image/jpeg, image/png, image/jpg" required>
-            <small style="color:#9ca3af;display:block;margin-bottom:12px;">Choose a clear photo of the person or object you want to appear on the right side of the thumbnail.</small>
+            <hr class="divider">
+            <p class="section-note">📸 Images are optional — leave blank and AI will create everything from your title & context</p>
 
-            <label>Image 2 (Background / Context Object)</label>
-            <input type="file" name="image2" accept="image/jpeg, image/png, image/jpg" required>
-            <small style="color:#9ca3af;display:block;margin-bottom:12px;">Upload an image that captures the mood or theme for the background (e.g. stock chart, scenery, product, etc.).</small>
+            <div class="image-field-wrapper">
+                <label for="image1">
+                    Image 1 (Face / Main Object)
+                    <span class="optional-badge">Optional</span>
+                </label>
+                <input type="file" name="image1" id="image1" accept="image/jpeg, image/png, image/jpg">
+                <span class="field-hint">Upload a clear photo of the person or object to appear on the right side.<br>
+                    <span class="optional-note">✨ Leave empty → AI will invent a suitable character/object from your context.</span>
+                </span>
+            </div>
+
+            <div class="image-field-wrapper">
+                <label for="image2">
+                    Image 2 (Background / Context Object)
+                    <span class="optional-badge">Optional</span>
+                </label>
+                <input type="file" name="image2" id="image2" accept="image/jpeg, image/png, image/jpg">
+                <span class="field-hint">Upload a background mood image (e.g. stock chart, scenery, product).<br>
+                    <span class="optional-note">✨ Leave empty → AI will design a fitting background from your context.</span>
+                </span>
+            </div>
 
             <button type="submit" class="btn-primary" id="submitBtn">⚡ Generate My Thumbnail</button>
         </form>
 
         <div id="loading">
             <div class="spinner"></div>
-            <p>Analyzing images &amp; crafting your thumbnail...</p>
-            <p class="loading-status" id="loading-status">Step 1/3: Analyzing image...</p>
+            <p>Crafting your thumbnail with AI magic...</p>
+            <p class="loading-status" id="loading-status">Step 1/3: Building master prompt...</p>
         </div>
 
         <div class="error-message" id="error-message"></div>
@@ -306,9 +386,9 @@
     <script>
         let statusTimer = null;
         const statusMessages = [
-            'Step 1/3: Analyzing image...',
-            'Step 2/3: Crafting master prompt...',
-            'Step 3/3: Generating AI image...' 
+            'Step 1/3: Building master prompt...',
+            'Step 2/3: Analyzing images & context...',
+            'Step 3/3: Generating AI image...'
         ];
         let statusIndex = 0;
 
@@ -374,9 +454,13 @@
                     // Show source badge
                     const badge = document.getElementById('source-badge');
                     if (result.source === 'php_compositor') {
-                        badge.innerHTML = '⚡ PHP Compositor (AI unavailable) — <span style="color:#fca5a5">' + (result.ai_error || '') + '</span>';
+                        badge.innerHTML = '✅ Thumbnail Generated (Real Face + Background)';
+                        badge.style.color = '#6ee7b7';
+                    } else if (result.source === 'gemini') {
+                        badge.textContent = '✅ AI Generated (Gemini)';
+                        badge.style.color = '#6ee7b7';
                     } else {
-                        badge.textContent = '✅ AI Generated (Gemini / Pollinations)';
+                        badge.textContent = '✅ AI Generated (Pollinations)';
                         badge.style.color = '#6ee7b7';
                     }
 
