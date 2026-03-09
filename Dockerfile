@@ -20,6 +20,12 @@ RUN apt-get update && apt-get install -y \
     && fc-cache -fv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# PHP config: raise memory & execution limits for image processing
+RUN echo "memory_limit = 512M" > /usr/local/etc/php/conf.d/custom.ini \
+    && echo "max_execution_time = 300" >> /usr/local/etc/php/conf.d/custom.ini \
+    && echo "upload_max_filesize = 20M" >> /usr/local/etc/php/conf.d/custom.ini \
+    && echo "post_max_size = 25M" >> /usr/local/etc/php/conf.d/custom.ini
+
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 

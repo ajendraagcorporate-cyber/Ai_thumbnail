@@ -78,13 +78,67 @@ class ThumbnailService
      *                         (defaults to 'general' if omitted).
      * @return string|null description or null on failure
      */
+    /**
+     * Resize an image to max 800×600 and return its JPEG bytes.
+     * This keeps base64 payloads small (<300 KB) and prevents PHP OOM crashes
+     * when users upload large photos (e.g. 4K / 8 MB+).
+     *
+     * @param string $path  absolute path to the image file
+     * @return string       raw JPEG bytes
+     */
+    private function resizeImageForUpload(string $path): string
+    {
+        $info = @getimagesize($path);
+        if (!$info) {
+            return file_get_contents($path); // not an image we can resize – return as-is
+        }
+
+        [$origW, $origH, $type] = $info;
+        $maxW = 800;
+        $maxH = 600;
+
+        // Only resize if needed
+        if ($origW <= $maxW && $origH <= $maxH) {
+            return file_get_contents($path);
+        }
+
+        // Calculate new dimensions keeping aspect ratio
+        $ratio   = min($maxW / $origW, $maxH / $origH);
+        $newW    = (int)($origW * $ratio);
+        $newH    = (int)($origH * $ratio);
+
+        $src = match ($type) {
+            IMAGETYPE_JPEG => @imagecreatefromjpeg($path),
+            IMAGETYPE_PNG  => @imagecreatefrompng($path),
+            IMAGETYPE_WEBP => @imagecreatefromwebp($path),
+            default        => false,
+        };
+
+        if (!$src) {
+            return file_get_contents($path); // fallback
+        }
+
+        $dst = imagecreatetruecolor($newW, $newH);
+        imagecopyresampled($dst, $src, 0, 0, 0, 0, $newW, $newH, $origW, $origH);
+        imagedestroy($src);
+
+        ob_start();
+        imagejpeg($dst, null, 85);
+        $bytes = ob_get_clean();
+        imagedestroy($dst);
+
+        return $bytes;
+    }
+
     public function analyzeImage($imagePath, $role = 'general')
     {
         if (!file_exists($imagePath) || !is_readable($imagePath)) {
             throw new \InvalidArgumentException("Image file not found: {$imagePath}");
         }
 
-        $imageData = base64_encode(file_get_contents($imagePath));
+        // Resize before encoding — prevents OOM crash on large uploaded photos
+        $imageData = base64_encode($this->resizeImageForUpload($imagePath));
+
         $modelName = env('GEMINI_MODEL_ANALYZE', 'gemini-1.5-flash');
         $endpoint = "{$this->baseUrl}/models/{$modelName}:generateContent";
 
@@ -280,7 +334,8 @@ class ThumbnailService
 
         $attachImage = function ($path) use (&$payloadParts) {
             if ($path && file_exists($path) && is_readable($path)) {
-                $data = base64_encode(file_get_contents($path));
+                // Resize before encoding to avoid PHP OOM on large photos
+                $data = base64_encode($this->resizeImageForUpload($path));
                 $payloadParts[] = ['inline_data' => ['mime_type' => 'image/jpeg', 'data' => $data]];
             }
         };

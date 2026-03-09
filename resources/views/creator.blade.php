@@ -443,7 +443,17 @@
                     }
                 });
 
-                const result = await response.json();
+                // Safely parse JSON — server may return empty body on fatal PHP crash
+                let result;
+                try {
+                    result = await response.json();
+                } catch (parseErr) {
+                    // PHP crashed or returned empty body — show status code
+                    errorMsg.textContent = `Server error (HTTP ${response.status}). The server crashed processing your request. Try with smaller images or no images.`;
+                    errorMsg.style.display = 'block';
+                    console.error('JSON parse error:', parseErr);
+                    return; // jump to finally
+                }
 
                 if (result.success) {
                     document.getElementById('thumbnail-preview').src = result.image_url;
@@ -479,6 +489,7 @@
                         resultContainer.style.display = 'block';
                     }
                 }
+
 
             } catch (err) {
                 // Try to get a useful message from the response if available
