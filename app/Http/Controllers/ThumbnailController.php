@@ -18,12 +18,13 @@ class ThumbnailController extends Controller
      */
     private function buildSmartFallbackPrompt(string $title, string $context): string
     {
-        return "Create a stunning, professional YouTube thumbnail image (16:9 ratio, 1280x720 pixels). "
-            . "TITLE TEXT (mandatory, large bold text on left side): \"{$title}\" — render in ultra-bright yellow (#FFD700) with thick black outline/shadow, bold sans-serif font, takes up 60% of the left side. "
-            . "RIGHT SIDE: a photorealistic, dramatic human figure or thematic object directly related to the topic: \"{$context}\", confident pose, vibrant lighting. "
-            . "BACKGROUND: bold, cinematic, dark gradient background with neon glowing accents and visual symbols strongly related to \"{$context}\" (e.g., for stock/finance topics: green stock charts, rupee/dollar symbols, upward arrows; for tech: circuit boards, blue neon; for travel: scenic landscapes). "
-            . "STYLE: high contrast, vibrant colors (deep purple/blue/black background with neon gold and green accents), dramatic lighting, professional YouTube CTR-optimized design. "
-            . "NO watermarks. NO extra text besides the title. Cinematic quality. Hyper-realistic.";
+        return "Generate a professional YouTube thumbnail image. 16:9 ratio, 1280x720 pixels. "
+            . "MANDATORY TITLE TEXT: Display ONLY these words as large bold text on the LEFT side: \"{$title}\". "
+            . "Use maximum 5 words if the title is long — truncate smartly. "
+            . "Font: extra-bold, thick sans-serif. Color: ultra-bright yellow (#FFD700) or white with a thick black shadow/outline for maximum readability. "
+            . "RIGHT SIDE: a photorealistic, dramatic human figure or thematic object directly related to: \"{$context}\". Confident pose, professional studio lighting, NO white background halo or outline artefacts. "
+            . "BACKGROUND: cinematic dark gradient with neon glowing accents and thematic symbols related to \"{$context}\" (e.g., finance: stock charts, rupee/dollar signs, upward arrows; tech: circuit boards; travel: scenic vistas). "
+            . "STYLE RULES: high contrast, vibrant palette (deep purple/blue/black + neon gold/green), dramatic professional lighting, clean classic aesthetic, NO watermarks, NO extra text besides the title, NO borders or frames. Hyper-realistic, cinematic quality.";
     }
 
     public function generate(Request $request, ThumbnailService $service)
@@ -84,40 +85,29 @@ class ThumbnailController extends Controller
             }
 
             // ──────────────────────────────────────────────────────────────
-            // Step 2: PATH A — Both images → PHP GD Compositor
-            //         Real face on right, real background on left, title text
-            // ──────────────────────────────────────────────────────────────
-            if ($hasBothImages) {
-                try {
-                    $base64Image = $service->createCompositedImage($image2Path, $image1Path, $title);
-
-                    return response()->json([
-                        'success'     => true,
-                        'prompt_used' => $finalPrompt,
-                        'image_url'   => "data:image/jpeg;base64," . $base64Image,
-                        'message'     => 'Thumbnail ready!',
-                        'source'      => 'php_compositor',
-                    ]);
-                } catch (\Exception $e) {
-                    \Illuminate\Support\Facades\Log::warning('PHP compositor failed, falling back to AI: ' . $e->getMessage());
-                    // fall through to AI generation below
-                }
-            }
-
-            // ──────────────────────────────────────────────────────────────
-            // Step 3: PATH B — Gemini Image API / Pollinations fallback
-            //         Uses the smart detailed prompt (not a blank placeholder)
+            // Step 2: AI Generation — always send images to Gemini as
+            //         inline_data so the model naturally blends face +
+            //         background lighting (no PHP GD compositor artefacts).
             // ──────────────────────────────────────────────────────────────
             try {
                 $imgResult   = $service->generateFinalImage($finalPrompt, $image1Path, $image2Path);
                 $base64Image = $imgResult['base64'];
 
+                $source  = $imgResult['service'] ?? 'pollinations';
+                $message = match ($imgResult['service'] ?? 'pollinations') {
+                    'imagen3' => 'Thumbnail ready! (Imagen-3 — Best Quality)',
+                    'gemini'  => $hasBothImages ? 'Thumbnail ready! (AI blended face + background)' : 'Thumbnail ready! (Gemini AI)',
+                    'local'   => 'Thumbnail ready! (Local synthesis fallback)',
+                    default   => 'Thumbnail ready! (Pollinations fallback)',
+                };
+
                 return response()->json([
-                    'success'     => true,
-                    'prompt_used' => $finalPrompt,
-                    'image_url'   => "data:image/jpeg;base64," . $base64Image,
-                    'message'     => 'Thumbnail ready! (AI Generated)',
-                    'source'      => $imgResult['service'] === 'gemini' ? 'gemini' : 'pollinations',
+                    'success'         => true,
+                    'prompt_used'     => $finalPrompt,
+                    'image_url'       => "data:image/jpeg;base64," . $base64Image,
+                    'message'         => $message,
+                    'source'          => $source,
+                    'has_both_images' => $hasBothImages,
                 ]);
             } catch (\Exception $aiEx) {
                 \Illuminate\Support\Facades\Log::error('All generation methods failed: ' . $aiEx->getMessage());

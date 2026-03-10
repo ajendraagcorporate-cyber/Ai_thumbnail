@@ -198,29 +198,33 @@ class ThumbnailService
         }
 
         $instruction .= "\nCRITICAL INSTRUCTIONS FOR THE AI IMAGE GENERATOR PROMPT YOU WILL WRITE:\n";
-        $instruction .= "1. TITLE TEXT: The EXACT text '{$title}' MUST BE prominently shown as large, bold, eye-catching text on the LEFT side. "
+        $instruction .= "1. TITLE TEXT: Display the text '{$title}' as large, extra-bold text on the LEFT side of the thumbnail. "
+            . "Use MAXIMUM 5 WORDS — if the title exceeds 5 words, intelligently abbreviate to the most impactful 5 words. "
             . "If the title is in Hindi/Devanagari or any non-English language, render it EXACTLY in that script. "
-            . "Use ultra-bright yellow or white color with thick dark shadow/outline. MANDATORY.\n";
+            . "Font: thick, extra-bold sans-serif. Color: ultra-bright yellow (#FFD700) or white with a thick black shadow/outline for maximum readability. MANDATORY.\n";
 
         if ($hasFace) {
-            $instruction .= "2. FACE/CHARACTER (RIGHT SIDE): The right side MUST show a PHOTOREALISTIC PERSON or OBJECT that closely matches "
-                . "the physical features, skin tone, hair, expression, and clothing described in Reference Image #1. "
-                . "Same hair color/style, same facial structure, same expression. Do NOT create a random/generic face.\n";
+            $instruction .= "2. FACE/CHARACTER (RIGHT SIDE): The right side MUST show a PHOTOREALISTIC PERSON that precisely matches "
+                . "the physical features, skin tone, hair color/style, facial structure, expression, and clothing described in Reference Image #1. "
+                . "The person must appear NATURALLY LIT matching the background — NO white background halo, NO white outline artefacts, NO cutout edges. "
+                . "Blend the subject seamlessly into the scene with professional studio-quality composite lighting.\n";
         } else {
             $instruction .= "2. FACE/CHARACTER (RIGHT SIDE): The right side MUST show a PHOTOREALISTIC, DRAMATIC character or object "
-                . "that is creatively and directly relevant to the video topic: '{$context}'. "
-                . "Make it visually striking and professional.\n";
+                . "directly relevant to the video topic: '{$context}'. Make it visually striking, professionally lit, and seamlessly composited.\n";
         }
 
         if ($hasBg) {
-            $instruction .= "3. BACKGROUND: Draw heavily from Reference Image #2's mood, colors, and elements. Bold, colorful, dramatic — bright gradients, neon effects, etc. High contrast.\n";
+            $instruction .= "3. BACKGROUND: Draw heavily from Reference Image #2's mood, dominant colors, and visual elements. "
+                . "Bold, colorful, dramatic — bright gradients, neon effects, high contrast. The face must blend naturally with this specific background's lighting.\n";
         } else {
             $instruction .= "3. BACKGROUND: Design a bold, dramatic, vivid background that perfectly represents the video topic: '{$context}'. "
                 . "Use neon gradients, glowing effects, and thematic visuals (e.g., financial charts for finance topics, landscapes for travel, etc.). High contrast.\n";
         }
 
         $instruction .= "4. CONTEXT ACCURACY: Incorporate compelling visual symbols directly related to '{$context}'.\n"
-            . "5. STYLE: Professional YouTube thumbnail. High contrast. Vibrant neon/gold/purple/red palette. 16:9 aspect ratio. No watermarks. No extra text besides the video title.\n"
+            . "5. STYLE RULES: Professional YouTube thumbnail. High contrast. Vibrant palette (neon gold/purple/red/blue). "
+            . "Clean and classic aesthetic. Professional dramatic lighting. 16:9 aspect ratio (1280x720). "
+            . "Absolutely NO watermarks. NO extra text besides the title. NO borders or frames. NO amateur compositing artefacts.\n"
             . "6. CRITICAL: Output ONLY the raw prompt text — a single paragraph. No explanatory text, asterisks, quotes, or intro phrases like 'Here is the prompt:'.\n";
 
         $response = $this->makeApiRequest($endpoint, [
@@ -274,27 +278,30 @@ class ThumbnailService
         return trim(str_replace(['**', '```'], '', $text));
     }
 
-    // Step 3: Imagen 3 API Final Image Generation
+    // ─────────────────────────────────────────────────────────────────────────
+    // Step 3: 3-Tier Image Generation (Bulletproof Fallback Strategy)
+    //
+    //   Tier 1 ▶ Imagen-3       (imagen-3.0-generate-002)
+    //            ✅ Best text spelling & professional lighting
+    //            ✅ Uses :predict endpoint with unique payload format
+    //            ❌ Text-to-image only (no inline image refs)
+    //
+    //   Tier 2 ▶ Gemini 2.0 Flash Preview (gemini-2.0-flash-preview-image-generation)
+    //            ✅ Accepts inline face+background images → natural blending
+    //            ✅ Falls back through older Gemini models automatically
+    //
+    //   Tier 3 ▶ Pollinations.ai (free, no API key, always available)
+    //            ✅ Zero-cost last resort, prevents 100% failure
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
-     * Request an image from the Gemini image model and return base64 bytes.
+     * Main entry point: tries all 3 tiers in order, returns first success.
      *
-     * This method is now used as the *primary* way of obtaining the thumbnail
-     * so that the output matches the prompt when fed directly to Gemini/other
-     * image services.  Previously the controller bypassed the API and drew a
-     * composition itself; that code is still available in
-     * createCompositedImage() if you ever want a deterministic fallback.
-     *
-     * @param string $prompt the text prompt generated earlier
-     * @return string|null base64-encoded JPEG/PNG bytes
-     */
-    /**
-     * Request an image from the Gemini image model and return base64 bytes.
-     *
-     * @param string      $prompt     The text prompt generated earlier
-     * @param string|null $facePath   Path to the face/main-object reference image
-     * @param string|null $bgPath     Path to the background reference image
-     * @return array                  ['base64' => string, 'service' => 'gemini'|'pollinations']
-     * @throws \Exception on persistent failure
+     * @param string      $prompt   The master prompt generated earlier
+     * @param string|null $facePath Path to face/person reference image
+     * @param string|null $bgPath   Path to background reference image
+     * @return array                ['base64' => string, 'service' => 'imagen3'|'gemini'|'pollinations']
+     * @throws \Exception when all 3 tiers fail
      */
     public function generateFinalImage($prompt, $facePath = null, $bgPath = null)
     {
@@ -303,38 +310,140 @@ class ThumbnailService
             throw new \InvalidArgumentException('Prompt cannot be empty');
         }
 
-        // Try multiple Gemini image models in order (first available will be used)
-        // gemini-2.0-flash-exp supports image generation natively via generateContent
-        $imageModels = [
-            env('GEMINI_MODEL_IMAGE', 'gemini-2.0-flash-exp'),
-            'gemini-2.0-flash',
-            'gemini-1.5-flash',
-        ];
+        // ── Tier 1: Imagen-3 ────────────────────────────────────────────────
+        $result = $this->tryImagen3($prompt);
+        if ($result) {
+            \Illuminate\Support\Facades\Log::info('✅ Tier 1 (Imagen-3) succeeded.');
+            return $result;
+        }
+        \Illuminate\Support\Facades\Log::warning('⚠️ Tier 1 (Imagen-3) failed. Trying Tier 2 (Gemini Flash Preview)...');
 
-        // Build contents payload with optional inline images
-        $hasImages = ($facePath && file_exists($facePath)) || ($bgPath && file_exists($bgPath));
+        // ── Tier 2: Gemini 2.0 Flash Preview (with inline image support) ────
+        $result = $this->tryGeminiFlashPreview($prompt, $facePath, $bgPath);
+        if ($result) {
+            \Illuminate\Support\Facades\Log::info('✅ Tier 2 (Gemini Flash Preview) succeeded.');
+            return $result;
+        }
+        \Illuminate\Support\Facades\Log::warning('⚠️ Tier 2 (Gemini) failed. Trying Tier 3 (Pollinations)...');
 
-        // Enhance prompt with explicit reference-image instructions when images are attached
-        $enhancedPrompt = $prompt;
-        if ($hasImages) {
-            $imageNote = "\n\nIMPORTANT: I am attaching reference images. ";
-            if ($facePath && file_exists($facePath)) {
-                $imageNote .= "The FIRST attached image is the face/person reference — replicate this person's exact facial features, skin tone, hair, and expression in the generated thumbnail. ";
-            }
-            if ($bgPath && file_exists($bgPath)) {
-                $imageNote .= "The SECOND attached image is the background/context reference — use its mood, colors, and elements for the background. ";
-            }
-            $imageNote .= "Follow the text prompt strictly.";
-            $enhancedPrompt = $prompt . $imageNote;
+        // ── Tier 3: Pollinations.ai ──────────────────────────────────────────
+        $result = $this->tryPollinations($prompt);
+        if ($result) {
+            \Illuminate\Support\Facades\Log::info('✅ Tier 3 (Pollinations) succeeded.');
+            return $result;
         }
 
-        $payloadParts = [
-            ['text' => $enhancedPrompt]
+        // ── Tier 4: Local GD Composite (Never-Fail Last Resort) ────────────────
+        \Illuminate\Support\Facades\Log::warning('⚠️ All AI tiers failed. Falling back to Tier 4 (Local Composite)...');
+        $b64 = $this->createCompositedImage($bgPath, $facePath, $prompt);
+        if ($b64) {
+            return ['base64' => $b64, 'service' => 'local'];
+        }
+
+        // if we reach here something truly failed
+        throw new \Exception('All generation methods (including local) failed.');
+    }
+
+    /**
+     * Tier 1 — Imagen-3 via the :predict endpoint.
+     * Uses a distinct payload format (instances/parameters), NOT generateContent.
+     * Best-in-class for text spelling accuracy in generated images.
+     *
+     * @param string $prompt
+     * @return array|null  ['base64' => ..., 'service' => 'imagen3'] or null on failure
+     */
+    private function tryImagen3(string $prompt): ?array
+    {
+        if (empty($this->apiKey)) return null;
+
+        // Using Imagen 4 as Tier 1 (available in this system)
+        $endpoint = "{$this->baseUrl}/models/imagen-4.0-generate-001:predict";
+
+        try {
+            $response = Http::withoutVerifying()
+                ->timeout(120)
+                ->post("{$endpoint}?key={$this->apiKey}", [
+                    'instances' => [
+                        ['prompt' => $prompt]
+                    ],
+                    'parameters' => [
+                        'sampleCount'       => 1,
+                        'aspectRatio'       => '16:9',       // YouTube 16:9
+                        'safetyFilterLevel' => 'block_some',
+                        'personGeneration'  => 'allow_adult',
+                    ],
+                ]);
+
+            if ($response->status() === 429) {
+                \Illuminate\Support\Facades\Log::warning('Imagen-3: Rate limit (429). Skipping to Tier 2.');
+                return null;
+            }
+
+            if ($response->status() === 400) {
+                // Billing not enabled or quota not available — skip silently
+                $errMsg = $response->json('error.message') ?? $response->body();
+                \Illuminate\Support\Facades\Log::warning("Imagen-3: 400 error — {$errMsg}");
+                return null;
+            }
+
+            if ($response->failed()) {
+                \Illuminate\Support\Facades\Log::warning("Imagen-3: Failed ({$response->status()}) — " . $response->body());
+                return null;
+            }
+
+            $b64 = $response->json('predictions.0.bytesBase64Encoded');
+            if ($b64) {
+                return ['base64' => $b64, 'service' => 'imagen3'];
+            }
+
+            \Illuminate\Support\Facades\Log::warning('Imagen-3: No image data in response. Body: ' . mb_substr($response->body(), 0, 300));
+            return null;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::warning('Imagen-3 exception: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Tier 2 — Gemini 2.0 Flash Preview image generation.
+     * Accepts inline face+background images → natural AI blending.
+     * Falls back through older Gemini models if Preview is unavailable.
+     *
+     * @param string      $prompt
+     * @param string|null $facePath
+     * @param string|null $bgPath
+     * @return array|null  ['base64' => ..., 'service' => 'gemini'] or null on total failure
+     */
+    private function tryGeminiFlashPreview(string $prompt, ?string $facePath, ?string $bgPath): ?array
+    {
+        // Model priority: best text rendering first, newer models from your models.json
+        $models = [
+            'gemini-3.1-flash-image-preview',
+            'gemini-2.5-flash-image',
+            'gemini-2.0-flash-exp-image-generation',
+            'gemini-2.0-flash',
         ];
 
-        $attachImage = function ($path) use (&$payloadParts) {
+        // Build parts: text prompt + optional inline images
+        $hasImages = ($facePath && file_exists($facePath)) || ($bgPath && file_exists($bgPath));
+
+        $enhancedPrompt = $prompt;
+        if ($hasImages) {
+            $note = "\n\nREFERENCE IMAGES ATTACHED — ";
+            if ($facePath && file_exists($facePath)) {
+                $note .= "Image 1 = face/person: replicate exact facial features, skin tone, expression, hair. ";
+            }
+            if ($bgPath && file_exists($bgPath)) {
+                $note .= "Image 2 = background: use its mood, colors, lighting palette. ";
+            }
+            $note .= "Blend subject naturally into background — NO white halos, NO cutout artefacts. Follow all prompt rules strictly.";
+            $enhancedPrompt = $prompt . $note;
+        }
+
+        $payloadParts = [['text' => $enhancedPrompt]];
+
+        $attachImage = function (?string $path) use (&$payloadParts): void {
             if ($path && file_exists($path) && is_readable($path)) {
-                // Resize before encoding to avoid PHP OOM on large photos
                 $data = base64_encode($this->resizeImageForUpload($path));
                 $payloadParts[] = ['inline_data' => ['mime_type' => 'image/jpeg', 'data' => $data]];
             }
@@ -342,77 +451,88 @@ class ThumbnailService
         $attachImage($facePath);
         $attachImage($bgPath);
 
-        foreach ($imageModels as $modelName) {
-            $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/{$modelName}:generateContent";
+        foreach ($models as $modelName) {
+            $endpoint = "{$this->baseUrl}/models/{$modelName}:generateContent";
             try {
                 $response = Http::withoutVerifying()
                     ->timeout(120)
                     ->post("{$endpoint}?key={$this->apiKey}", [
-                        'contents' => [[
-                            'parts' => $payloadParts
-                        ]],
-                        'generationConfig' => [
-                            'responseModalities' => ['TEXT', 'IMAGE']
-                        ]
+                        'contents'         => [['parts' => $payloadParts]],
+                        'generationConfig' => ['responseModalities' => ['TEXT', 'IMAGE']],
                     ]);
 
                 if ($response->status() === 404) {
-                    \Illuminate\Support\Facades\Log::warning("Model {$modelName} not found, trying next...");
-                    continue; // try next model
+                    \Illuminate\Support\Facades\Log::warning("Gemini Tier 2: Model {$modelName} not found, trying next...");
+                    continue;
                 }
-
+                if ($response->status() === 429) {
+                    \Illuminate\Support\Facades\Log::warning("Gemini Tier 2: Model {$modelName} rate-limited, trying next...");
+                    continue;
+                }
                 if ($response->failed()) {
-                    \Illuminate\Support\Facades\Log::warning("Model {$modelName} failed ({$response->status()}), trying next...");
+                    \Illuminate\Support\Facades\Log::warning("Gemini Tier 2: Model {$modelName} failed ({$response->status()}).");
                     continue;
                 }
 
-                \Illuminate\Support\Facades\Log::info("Gemini image response from {$modelName}");
+                \Illuminate\Support\Facades\Log::info("Gemini Tier 2: Got response from {$modelName}.");
 
-                // Several possible locations for the returned image bytes
-                if ($response->json('predictions.0.bytesBase64Encoded')) {
-                    return ['base64' => $response->json('predictions.0.bytesBase64Encoded'), 'service' => 'gemini'];
+                // Check all known response locations for base64 image data
+                if ($b64 = $response->json('predictions.0.bytesBase64Encoded')) {
+                    return ['base64' => $b64, 'service' => 'gemini'];
                 }
-
-                if ($response->json('candidates.0.content.parts.0.inlineData.data')) {
-                    return ['base64' => $response->json('candidates.0.content.parts.0.inlineData.data'), 'service' => 'gemini'];
+                if ($b64 = $response->json('candidates.0.content.parts.0.inlineData.data')) {
+                    return ['base64' => $b64, 'service' => 'gemini'];
                 }
-
-                $candidates = $response->json('candidates') ?? [];
-                foreach ($candidates as $candidate) {
-                    $parts = $candidate['content']['parts'] ?? [];
-                    foreach ($parts as $part) {
+                foreach ($response->json('candidates') ?? [] as $candidate) {
+                    foreach ($candidate['content']['parts'] ?? [] as $part) {
                         if (!empty($part['inlineData']['data'])) {
                             return ['base64' => $part['inlineData']['data'], 'service' => 'gemini'];
                         }
                     }
                 }
 
-                \Illuminate\Support\Facades\Log::warning("Model {$modelName} returned no image data.");
+                \Illuminate\Support\Facades\Log::warning("Gemini Tier 2: {$modelName} returned no image data.");
             } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::warning("Model {$modelName} exception: " . $e->getMessage());
+                \Illuminate\Support\Facades\Log::warning("Gemini Tier 2: {$modelName} exception — " . $e->getMessage());
             }
         }
 
-        \Illuminate\Support\Facades\Log::warning('All Gemini image models failed. Falling back to Pollinations.ai');
+        return null; // all Gemini models exhausted
+    }
 
-        // --- Fallback: Pollinations.ai (free, no key needed) ---
-        // Use a truncated but keyword-rich version of the prompt for best URL compatibility
-        $shortPrompt = mb_substr($prompt, 0, 500);
+    /**
+     * Tier 3 — Pollinations.ai (free, no API key, always available).
+     * Text-to-image only — used as the never-fail last resort.
+     *
+     * @param string $prompt
+     * @return array  ['base64' => ..., 'service' => 'pollinations']
+     * @throws \Exception if Pollinations also fails
+     */
+    private function tryPollinations(string $prompt): ?array
+    {
+        // Shorter, simpler prompt for fallback reliability
+        $shortPrompt   = mb_substr($prompt, 0, 400);
         $encodedPrompt = rawurlencode($shortPrompt);
-        $seed = rand(1, 99999);
-        $pollinationsUrl = "https://image.pollinations.ai/prompt/{$encodedPrompt}?width=1280&height=720&nologo=true&enhance=true&model=flux&seed={$seed}";
+        $seed          = rand(1, 99999);
+        // Remove high-end model/params if service is struggling
+        $url           = "https://image.pollinations.ai/prompt/{$encodedPrompt}?width=1280&height=720&nologo=true&seed={$seed}";
 
-        \Illuminate\Support\Facades\Log::info('Trying Pollinations.ai fallback: ' . $pollinationsUrl);
+        \Illuminate\Support\Facades\Log::info('Tier 3 (Pollinations) URL: ' . $url);
 
-        $imgResponse = Http::withoutVerifying()->timeout(90)->get($pollinationsUrl);
+        try {
+            $imgResponse = Http::withoutVerifying()
+                ->withHeaders(['User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'])
+                ->timeout(60)
+                ->get($url);
 
-        if ($imgResponse->successful() && strlen($imgResponse->body()) > 1000) {
-            return ['base64' => base64_encode($imgResponse->body()), 'service' => 'pollinations'];
+            if ($imgResponse->successful() && strlen($imgResponse->body()) > 2000) {
+                return ['base64' => base64_encode($imgResponse->body()), 'service' => 'pollinations'];
+            }
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Pollinations failed: ' . $e->getMessage());
         }
 
-        // if we reach here something unexpected happened
-        \Illuminate\Support\Facades\Log::error('Both Gemini and Pollinations failed.');
-        throw new \Exception('Could not generate image. Please check your API key and try again.');
+        return null;
     }
 
     /**
@@ -517,10 +637,12 @@ class ThumbnailService
         }
 
         $loadImage = function ($path) {
+            if (empty($path)) return false;
+            if (!file_exists($path)) return false;
             $info = @getimagesize($path);
             if (!$info) return false;
-            if ($info[2] == IMAGETYPE_PNG) return imagecreatefrompng($path);
-            if ($info[2] == IMAGETYPE_JPEG) return imagecreatefromjpeg($path);
+            if ($info[2] == IMAGETYPE_PNG) return @imagecreatefrompng($path);
+            if ($info[2] == IMAGETYPE_JPEG) return @imagecreatefromjpeg($path);
             if ($info[2] == IMAGETYPE_WEBP) return @imagecreatefromwebp($path);
             return false;
         };

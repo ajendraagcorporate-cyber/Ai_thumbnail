@@ -13,9 +13,3 @@ $response = \Illuminate\Support\Facades\Http::withoutVerifying()->post("https://
     ]]
 ]);
 file_put_contents('test_image2.json', $response->body());
-
-
-
-
-
-

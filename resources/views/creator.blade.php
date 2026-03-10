@@ -458,21 +458,21 @@
                 if (result.success) {
                     document.getElementById('thumbnail-preview').src = result.image_url;
                     document.getElementById('thumbnail-preview').style.display = 'block';
+                    document.querySelector('#result-container h3').style.display = 'block'; 
                     document.getElementById('prompt-used').textContent = result.prompt_used;
                     window.generatedImageBase64 = result.image_url;
 
                     // Show source badge
                     const badge = document.getElementById('source-badge');
-                    if (result.source === 'php_compositor') {
-                        badge.innerHTML = '✅ Thumbnail Generated (Real Face + Background)';
-                        badge.style.color = '#6ee7b7';
-                    } else if (result.source === 'gemini') {
-                        badge.textContent = '✅ AI Generated (Gemini)';
-                        badge.style.color = '#6ee7b7';
-                    } else {
-                        badge.textContent = '✅ AI Generated (Pollinations)';
-                        badge.style.color = '#6ee7b7';
-                    }
+                    const sourceMessages = {
+                        'imagen3': '✅ Thumbnail Generated (Imagen-3 — Best Quality)',
+                        'gemini': result.has_both_images ? '✅ Thumbnail Generated (AI blended face + background)' : '✅ AI Generated (Gemini)',
+                        'pollinations': '✅ AI Generated (Pollinations Fallback)',
+                        'local': '✅ Thumbnail Generated (Local Synthesis)',
+                        'php_compositor': '✅ Thumbnail Generated (Legacy Synthesis)'
+                    };
+                    badge.textContent = sourceMessages[result.source] || `✅ Thumbnail Generated (${result.source})`;
+                    badge.style.color = '#6ee7b7';
 
                     resultContainer.style.display = 'block';
                 } else {
@@ -486,6 +486,7 @@
                     if (result.prompt_used) {
                         document.getElementById('prompt-used').textContent = result.prompt_used;
                         document.getElementById('thumbnail-preview').style.display = 'none';
+                        document.querySelector('#result-container h3').style.display = 'none'; // Hide "Ready!" header
                         resultContainer.style.display = 'block';
                     }
                 }
